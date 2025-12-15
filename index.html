@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Traveling Microscope (Three.js)</title>
+    <!-- Load Three.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; color: white; font-family: sans-serif; }
+        
+        /* Layout */
+        #container { display: flex; height: 100vh; width: 100vw; }
+        
+        /* LEFT: 3D Scene */
+        #scene-container { flex: 3; position: relative; border-right: 2px solid #333; }
+        #scene-label {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0,0,0,0.7); padding: 5px 10px;
+            border-radius: 4px; pointer-events: none;
+            user-select: none;
+        }
+
+        /* RIGHT: Controls & Eyepiece */
+        #ui-panel {
+            flex: 1.5; min-width: 350px;
+            background: #1a1a1a;
+            display: flex; flex-direction: column;
+            padding: 15px; box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        /* Eyepiece View (Circular) */
+        .eyepiece-wrapper {
+            width: 300px; height: 300px;
+            margin: 0 auto 20px auto;
+            position: relative;
+            border-radius: 50%;
+            border: 5px solid #444;
+            overflow: hidden;
+            background: #000;
+            box-shadow: inset 0 0 40px #000;
+            flex-shrink: 0;
+        }
+        canvas#viewCanvas { width: 100%; height: 100%; display: block; }
+        .crosshair-v {
+            position: absolute; top: 0; left: 50%; width: 1px; height: 100%;
+            background: rgba(255, 255, 255, 0.7); transform: translateX(-50%);
+        }
+        .crosshair-h {
+            position: absolute; top: 50%; left: 0; width: 100%; height: 1px;
+            background: rgba(255, 255, 255, 0.7); transform: translateY(-50%);
+        }
+
+        /* Controls */
+        .control-group { margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 15px; }
+        .control-group h3 { margin-top: 0; color: #aaa; font-size: 16px; }
+        label { display: block; margin: 8px 0; font-size: 14px; color: #ccc; }
+        input[type=range] { width: 100%; }
+        
+        /* Micrometer Wheel UI */
+        .wheel-container {
+            display: flex; align-items: center; justify-content: space-between;
+            background: #222; padding: 10px; border-radius: 8px;
+        }
+        .reading-box {
+            font-family: 'Courier New', monospace; font-size: 20px;
+            color: #0f0; background: #000; padding: 5px 10px; border: 1px solid #555;
+        }
+        button.record-btn {
+            width: 100%; padding: 10px; background: #0066cc; color: white;
+            border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 5px;
+        }
+        button.record-btn:hover { background: #0055aa; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+        th, td { border-bottom: 1px solid #333; padding: 5px; text-align: left; }
+        th { color: #888; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <!-- 3D Scene -->
+    <div id="scene-container">
+        <div id="scene-label">
+            <strong>3D View</strong><br>
+            <span style="font-size:12px; color:#aaa">Left Click: Rotate | Right Click: Pan | Scroll: Zoom</span>
+        </div>
+        <!-- Three.js Canvas attaches here -->
+    </div>
+
+    <!-- UI Panel -->
+    <div id="ui-panel">
+        <div class="eyepiece-wrapper">
+            <canvas id="viewCanvas"></canvas>
+            <div class="crosshair-v"></div>
+            <div class="crosshair-h"></div>
+        </div>
+
+        <div class="control-group">
+            <h3>Micrometer Controls</h3>
+            <p style="font-size:12px; color:#888; margin:0 0 10px 0;">Use slider for coarse, buttons for fine tune.</p>
+            
+            <label>Position: <input type="range" id="knob-slider" min="0" max="20" step="0.01" value="10"></label>
+            
+            <div class="wheel-container">
+                <button onclick="adjust(-0.01)">◄ Fine</button>
+                <div class="reading-box" id="reading-display">10.000 mm</div>
+                <button onclick="adjust(0.01)">Fine ►</button>
+            </div>
+            <button class="record-btn" onclick="recordData()">Record Reading</button>
+        </div>
+
+        <div class="control-group">
+            <h3>Experiment Parameters</h3>
+            <label>Wavelength (λ): <span id="lbl-lam">600</span> nm
+                <input type="range" id="inp-lam" min="400" max="700" step="10" value="600">
+            </label>
+            <label>Slit Separation (d): <span id="lbl-d">0.5</span> mm
+                <input type="range" id="inp-d" min="0.2" max="1.0" step="0.1" value="0.5">
+            </label>
+            <label>Screen Distance (D): <span id="lbl-D">1.0</span> m
+                <input type="range" id="inp-D" min="0.5" max="2.0" step="0.1" value="1.0">
+            </label>
+        </div>
+
+        <div class="control-group" style="border:none;">
+            <h3>Data Log</h3>
+            <table id="data-table">
+                <thead><tr><th>#</th><th>Pos (mm)</th><th>Δ (β)</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            <p id="calc-result" style="font-size:12px; color:#aaa; margin-top:5px;">Theoretical β: --</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ==========================================
+    // PART 1: THREE.JS 3D SCENE SETUP
+    // ==========================================
+    const sceneContainer = document.getElementById('scene-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+    scene.fog = new THREE.Fog(0x050505, 50, 150);
+
+    const camera = new THREE.PerspectiveCamera(45, sceneContainer.clientWidth / sceneContainer.clientHeight, 0.1, 1000);
+    camera.position.set(20, 15, 30); // Look from an angle
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(sceneContainer.clientWidth, sceneContainer.clientHeight);
+    sceneContainer.appendChild(renderer.domElement);
+
+    // Orbit Controls
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0x404040, 1.5); // Soft white light
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    // --- 3D OBJECTS ---
+
+    // 1. Optical Bench (The Rail)
+    const railGeo = new THREE.BoxGeometry(60, 1, 4);
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.2 });
+    const rail = new THREE.Mesh(railGeo, railMat);
+    rail.position.y = -0.5;
+    scene.add(rail);
+
+    // 2. Laser Source
+    const laserGeo = new THREE.CylinderGeometry(1, 1, 6, 32);
+    const laserMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const laserBody = new THREE.Mesh(laserGeo, laserMat);
+    laserBody.rotation.z = Math.PI / 2;
+    laserBody.position.set(-25, 3, 0);
+    scene.add(laserBody);
+
+    // Laser Beam (Visual)
+    const beamGeo = new THREE.CylinderGeometry(0.1, 0.1, 50, 8);
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.rotation.z = Math.PI / 2;
+    beam.position.set(0, 3, 0); // Spans across
+    scene.add(beam);
+
+    // 3. Double Slit Plate
+    const slitPlateGeo = new THREE.BoxGeometry(0.2, 5, 4);
+    const slitPlateMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+    const slitPlate = new THREE.Mesh(slitPlateGeo, slitPlateMat);
+    slitPlate.position.set(-15, 3, 0);
+    scene.add(slitPlate);
+
+    // 4. Screen
+    const screenGeo = new THREE.BoxGeometry(0.2, 8, 8);
+    const screenMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee });
+    const screenObj = new THREE.Mesh(screenGeo, screenMat);
+    screenObj.position.set(15, 4, 0);
+    scene.add(screenObj);
+
+    // 5. Traveling Microscope (Complex Object)
+    const microGroup = new THREE.Group();
+    
+    // Base
+    const baseMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 1, 4), 
+        new THREE.MeshStandardMaterial({ color: 0x666666 })
+    );
+    baseMesh.position.y = 1;
+    microGroup.add(baseMesh);
+
+    // Vertical Stand
+    const standMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 5),
+        new THREE.MeshStandardMaterial({ color: 0x888888 })
+    );
+    standMesh.position.y = 3.5;
+    microGroup.add(standMesh);
+
+    // The Scope (Horizontal Tube)
+    const scopeMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.6, 0.8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x333333 })
+    );
+    scopeMesh.rotation.z = Math.PI / 2;
+    scopeMesh.position.y = 6;
+    microGroup.add(scopeMesh);
+
+    // Eyepiece
+    const eyePieceMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(1, 0.6, 1),
+        new THREE.MeshStandardMaterial({ color: 0x111111 })
+    );
+    eyePieceMesh.rotation.z = Math.PI / 2;
+    eyePieceMesh.position.set(3, 6, 0);
+    microGroup.add(eyePieceMesh);
+
+    // Initial Position of Microscope (Start near the screen)
+    microGroup.position.set(10, 0, 0); 
+    scene.add(microGroup);
+
+
+    // ==========================================
+    // PART 2: PHYSICS & 2D CANVAS RENDERING
+    // ==========================================
+    
+    // Experiment State
+    const state = {
+        pos: 10.00, // Micrometer position (mm)
+        lam: 600,   // Wavelength (nm)
+        d: 0.5,     // Slit dist (mm)
+        D: 1.0,     // Screen dist (m)
+        readings: []
+    };
+
+    const canvas = document.getElementById('viewCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    function updatePhysics() {
+        // Update 3D Model Color based on Wavelength
+        const color = wavelengthToHex(state.lam);
+        beam.material.color.setHex(color);
+        
+        // Update 3D Microscope Position
+        // Map 0-20mm range to -5 to +5 on Z axis relative to screen center?
+        // Actually, traveling microscope moves strictly perpendicular to the beam axis (transverse).
+        // In our 3D scene, the rail is X, but transverse is Z.
+        // Let's assume the microscope is mounted on the rail (X=18) and moves along Z to measure fringe width.
+        
+        // Re-position microscope in 3D:
+        // x = 18 (near screen), y = 0, z = (state.pos - 10)
+        // 10mm is center. 0mm is -10 (left), 20mm is +10 (right)
+        microGroup.position.set(12, 0, (state.pos - 10) * 0.5); // Scale down movement for 3D visual
+        
+        microGroup.lookAt(15, 6, (state.pos - 10) * 0.5); // Look at screen
+    }
+
+    function drawFringes() {
+        const w = canvas.width = canvas.offsetWidth;
+        const h = canvas.height = canvas.offsetHeight;
+        
+        // Physics Calculation
+        // y (position on screen) = micrometer position
+        // Center of pattern is at 10.00 mm
+        const centerPos = 10.00;
+        
+        const pixelsPerMM = 100; // Magnification factor
+        
+        // Clear background
+        ctx.fillStyle = "black";
+        ctx.fillRect(0,0,w,h);
+
+        const imgData = ctx.createImageData(w, h);
+        const data = imgData.data;
+        
+        const rgb = wavelengthToRGB(state.lam);
+
+        for(let px = 0; px < w; px++) {
+            // Distance of this pixel from the view center
+            const distPx = px - (w/2);
+            const distMM = distPx / pixelsPerMM;
+            
+            // Physical coordinate on the screen being viewed
+            const x_physical = state.pos + distMM; 
+            
+            // Distance from center of interference pattern
+            const x = x_physical - centerPos;
+            
+            // Intensity Formula: I = cos^2 ( (pi * d * x) / (lambda * D) )
+            const lam_mm = state.lam * 1e-6;
+            const D_mm = state.D * 1000;
+            
+            const phase = (Math.PI * state.d * x) / (lam_mm * D_mm);
+            let intensity = Math.pow(Math.cos(phase), 2);
+            
+            // Add diffraction envelope (optional, makes it look real)
+            const a = 0.1; // Single slit width approximation
+            const alpha = (Math.PI * a * x) / (lam_mm * D_mm);
+            if(Math.abs(alpha) > 0.001) intensity *= Math.pow(Math.sin(alpha)/alpha, 2);
+
+            // Draw vertical strip
+            for(let py=0; py<h; py++) {
+                const idx = (py*w + px)*4;
+                // Add noise/grain
+                const grain = (Math.random()*20);
+                
+                data[idx] = (rgb.r * intensity) + grain;
+                data[idx+1] = (rgb.g * intensity) + grain;
+                data[idx+2] = (rgb.b * intensity) + grain;
+                data[idx+3] = 255;
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        
+        // Calc Theoretical
+        const beta = (state.lam * 1e-6 * state.D * 1000) / state.d;
+        document.getElementById('calc-result').innerText = `Theoretical β: ${beta.toFixed(3)} mm`;
+    }
+
+    // ==========================================
+    // PART 3: UTILS & EVENTS
+    // ==========================================
+
+    function wavelengthToHex(wl) {
+        // Simplified color mapping
+        if(wl < 450) return 0x8800ff;
+        if(wl < 490) return 0x0000ff;
+        if(wl < 520) return 0x00ffff;
+        if(wl < 570) return 0x00ff00;
+        if(wl < 600) return 0xffff00;
+        if(wl < 650) return 0xff8800;
+        return 0xff0000;
+    }
+    
+    function wavelengthToRGB(wl) {
+        const hex = wavelengthToHex(wl);
+        return {
+            r: (hex >> 16) & 255,
+            g: (hex >> 8) & 255,
+            b: hex & 255
+        };
+    }
+
+    // UI Input Handling
+    const knobSlider = document.getElementById('knob-slider');
+    const readout = document.getElementById('reading-display');
+
+    // Update function
+    function updateAll() {
+        state.pos = parseFloat(knobSlider.value);
+        state.lam = parseFloat(document.getElementById('inp-lam').value);
+        state.d = parseFloat(document.getElementById('inp-d').value);
+        state.D = parseFloat(document.getElementById('inp-D').value);
+
+        // Update Labels
+        readout.innerText = state.pos.toFixed(3) + " mm";
+        document.getElementById('lbl-lam').innerText = state.lam;
+        document.getElementById('lbl-d').innerText = state.d;
+        document.getElementById('lbl-D').innerText = state.D;
+
+        updatePhysics();
+        drawFringes();
+    }
+
+    // Fine adjustment buttons
+    window.adjust = function(delta) {
+        let newVal = parseFloat(knobSlider.value) + delta;
+        if(newVal < 0) newVal = 0;
+        if(newVal > 20) newVal = 20;
+        knobSlider.value = newVal;
+        updateAll();
+    }
+
+    // Record Data
+    window.recordData = function() {
+        state.readings.push(state.pos);
+        const tbody = document.querySelector('#data-table tbody');
+        const row = document.createElement('tr');
+        
+        let diff = "-";
+        if(state.readings.length > 1) {
+            diff = Math.abs(state.readings[state.readings.length-1] - state.readings[state.readings.length-2]).toFixed(3);
+        }
+        
+        row.innerHTML = `<td>${state.readings.length}</td><td>${state.pos.toFixed(3)}</td><td>${diff}</td>`;
+        tbody.appendChild(row);
+    }
+
+    // Event Listeners
+    knobSlider.addEventListener('input', updateAll);
+    document.getElementById('inp-lam').addEventListener('input', updateAll);
+    document.getElementById('inp-d').addEventListener('input', updateAll);
+    document.getElementById('inp-D').addEventListener('input', updateAll);
+
+    // Window Resize for Three.js
+    window.addEventListener('resize', () => {
+        camera.aspect = sceneContainer.clientWidth / sceneContainer.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(sceneContainer.clientWidth, sceneContainer.clientHeight);
+        drawFringes();
+    });
+
+    // Animation Loop
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // Initialize
+    updateAll();
+    animate();
+
+</script>
+</body>
+</html>
